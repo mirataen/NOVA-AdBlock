@@ -1,0 +1,50 @@
+name: NOVAAdBlock
+options:
+  minimumXcodeGenVersion: 2.38.0
+settings:
+  base:
+    IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+    SWIFT_VERSION: "5.0"
+    TARGETED_DEVICE_FAMILY: "1,2"
+    CODE_SIGNING_ALLOWED: "NO"
+targets:
+  NOVAAdBlock:
+    type: application
+    platform: iOS
+    sources:
+      - path: App
+        excludes:
+          - NOVA.entitlements
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleDisplayName: NOVA AdBlock
+        LSRequiresIPhoneOS: true
+        UIRequiredDeviceCapabilities: [arm64]
+        UILaunchScreen: {}
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.nova.adblock
+        CODE_SIGN_ENTITLEMENTS: App/NOVA.entitlements
+        ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS: "NO"
+    dependencies:
+      - target: NOVATunnel
+        embed: true
+  NOVATunnel:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: Tunnel
+        excludes:
+          - Tunnel.entitlements
+    info:
+      path: Tunnel/Info.plist
+      properties:
+        CFBundleDisplayName: NOVA DNS Tunnel
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.networkextension.packet-tunnel
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).PacketTunnelProvider
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.nova.adblock.tunnel
+        CODE_SIGN_ENTITLEMENTS: Tunnel/Tunnel.entitlements
