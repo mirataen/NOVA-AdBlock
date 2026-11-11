@@ -1,380 +1,251 @@
 import SwiftUI
-import NetworkExtension
 
 @main
 struct NOVAAdBlockApp: App {
-    @StateObject private var vpn = VPNController()
     var body: some Scene {
         WindowGroup {
-            ContentView().environmentObject(vpn)
+            NOVAHomeView()
         }
     }
 }
 
-enum ProtectionMode: String, CaseIterable, Identifiable {
-    case dns = "DNS only"
-    case vpnFiltering = "VPN + AdBlock"
-    case vpn = "VPN only"
+/// An entitlement-free companion to encrypted DNS configuration profiles.
+/// The app does NOT claim to configure iOS DNS by itself.
+private enum DNSProvider: String, CaseIterable, Identifiable {
+    case big = "OISD Big"
+    case alternative = "OISD Full alternative"
+
     var id: String { rawValue }
-    var subtitle: String {
+
+    var service: String {
         switch self {
-        case .dns: return "Filter domains locally without changing your public IP"
-        case .vpnFiltering: return "Requires a remote VPN server and VPN protocol"
-        case .vpn: return "Requires a remote VPN server and VPN protocol"
+        case .big: return "Public RDNS Lite"
+        case .alternative: return "Control D Free DNS"
         }
     }
-    var symbol: String {
+
+    var endpoint: String {
         switch self {
-        case .dns: return "shield.lefthalf.filled"
-        case .vpnFiltering: return "lock.shield"
-        case .vpn: return "network"
+        case .big: return "https://lite.public-rdns.com/dns-query"
+        case .alternative: return "https://freedns.controld.com/x-oisd"
         }
+    }
+
+    var profileName: String {
+        switch self {
+        case .big: return "NOVA-OISD-Big.mobileconfig"
+        case .alternative: return "NOVA-OISD-Full-Alternative.mobileconfig"
+        }
+    }
+
+    var details: String {
+        switch self {
+        case .big:
+            return "Uses the OISD Big list advertised by Public RDNS Lite."
+        case .alternative:
+            return "Uses Control D's free OISD Full DNS preset."
+        }
+    }
+
+    var providerInfoURL: URL {
+        let address: String
+        switch self {
+        case .big: address = "https://public-rdns.com/lite.html"
+        case .alternative: address = "https://controld.com/free-dns/"
+        }
+        return URL(string: address)!
+    }
+
+    var profileURL: URL {
+        URL(string: "https://raw.githubusercontent.com/mirataen/NOVA-AdBlock/main/profiles/" + profileName)!
     }
 }
 
-@MainActor
-final class VPNController: ObservableObject {
-    @Published private(set) var status: NEVPNStatus = .disconnected
-    @Published private(set) var busy = false
-    @Published var errorText: String?
-    @Published private(set) var signingIssue = false
+struct NOVAHomeView: View {
+    @AppStorage("nova.profileChoice") private var selectedProvider = "OISD Big"
+    @State private var confirmedInstalled = false
 
-    private var manager: NETunnelProviderManager?
-    private var observer: NSObjectProtocol?
-
-    init() {
-        observer = NotificationCenter.default.addObserver(
-            forName: .NEVPNStatusDidChange, object: nil, queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor [weak self] in self?.updateStatus() }
-        }
-        Task { await reload() }
+    private var choice: DNSProvider {
+        DNSProvider(rawValue: selectedProvider) ?? .big
     }
 
-    deinit {
-        if let observer { NotificationCenter.default.removeObserver(observer) }
-    }
-
-    var enabled: Bool {
-        status == .connected || status == .connecting || status == .reasserting
-    }
-
-    var statusLabel: String {
-        switch status {
-        case .connected: return "Local DNS protection active"
-        case .connecting, .reasserting: return "Connecting"
-        case .disconnecting: return "Disconnecting"
-        default: return "Disconnected"
-        }
-    }
-
-    func updateStatus() {
-        status = manager?.connection.status ?? .disconnected
-    }
-
-    private func describe(_ error: Error, operation: String) -> String {
-        let message = (error as NSError).localizedDescription
-        let lower = message.lowercased()
-        if lower.contains("permission denied") ||
-            lower.contains("not entitled") ||
-            lower.contains("missing entitlement") {
-            signingIssue = true
-            return "iOS denied Network Extension access. Check the installed signing entitlement and provisioning profiles for both NOVA AdBlock and its tunnel extension."
-        }
-        signingIssue = false
-        return "\(operation): \(message)"
-    }
-
-    func reload() async {
-        do {
-            let managers = try await NETunnelProviderManager.loadAllFromPreferences()
-            manager = managers.first {
-                ($0.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier
-                    == "com.nova.adblock.tunnel"
-            }
-            updateStatus()
-            signingIssue = false
-            errorText = nil
-        } catch {
-            errorText = describe(error, operation: "Unable to read VPN settings")
-        }
-    }
-
-    func setProtection(_ enabled: Bool, resolver: String,
-                       filtering: Bool, allowed: [String], blocked: [String]) async {
-        guard !busy else { return }
-        busy = true
-        defer { busy = false }
-        errorText = nil
-        do {
-            if enabled {
-                let managers = try await NETunnelProviderManager.loadAllFromPreferences()
-                let mgr = managers.first {
-                    ($0.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier
-                        == "com.nova.adblock.tunnel"
-                } ?? NETunnelProviderManager()
-
-                let config = NETunnelProviderProtocol()
-                config.providerBundleIdentifier = "com.nova.adblock.tunnel"
-                config.serverAddress = "On-device DNS"
-                config.providerConfiguration = [
-                    "configVersion": "2",
-                    "dnsResolver": resolver,
-                    "filterEnabled": filtering ? "1" : "0",
-                    "allowDomains": allowed,
-                    "blockDomains": blocked
-                ]
-                mgr.localizedDescription = "NOVA AdBlock DNS"
-                mgr.protocolConfiguration = config
-                mgr.isEnabled = true
-                try await mgr.saveToPreferences()
-                try await mgr.loadFromPreferences()
-                manager = mgr
-                try mgr.connection.startVPNTunnel()
-            } else {
-                manager?.connection.stopVPNTunnel()
-            }
-            updateStatus()
-        } catch {
-            errorText = describe(error, operation: "Cannot change protection")
-        }
-    }
-}
-
-private func parseDomainLines(_ text: String) -> [String] {
-    let items = text.split(whereSeparator: { $0 == "\n" || $0 == "," || $0 == " " || $0 == "\t" })
-    return Array(Set(items.map {
-        String($0).lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))
-    }.filter { candidate in
-        !candidate.isEmpty &&
-        candidate.count <= 253 &&
-        candidate.contains(".") &&
-        candidate.utf8.allSatisfy {
-            (97...122).contains(Int($0)) || (48...57).contains(Int($0)) || $0 == 45 || $0 == 46
-        }
-    })).sorted()
-}
-
-struct ContentView: View {
-    @EnvironmentObject private var vpn: VPNController
-    @AppStorage("nova.resolver") private var resolver = "cloudflare"
-    @AppStorage("nova.filterEnabled") private var filterEnabled = true
-    @AppStorage("nova.allowDomains") private var allowDomains = ""
-    @AppStorage("nova.blockDomains") private var blockDomains = ""
-    @State private var selectedMode: ProtectionMode = .dns
-
-    private var changesRequireReconnect: String {
-        "DNS settings and custom rules apply when you next connect."
-    }
+    private let navy = Color(red: 0.035, green: 0.055, blue: 0.11)
+    private let cyan = Color(red: 0.18, green: 0.82, blue: 0.98)
 
     var body: some View {
         ZStack {
-            Color(red: 0.035, green: 0.055, blue: 0.11).ignoresSafeArea()
+            navy.ignoresSafeArea()
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
-                    hero
-                    status
-                    modeChooser
-                    if selectedMode == .dns {
-                        dnsSettings
-                    } else {
-                        vpnSetup
-                    }
-                    Text("Designed for iOS 27. Actual tunnel activation requires Apple Network Extension entitlements in both signing profiles. No traffic is sent to an undisclosed VPN server.")
-                        .font(.footnote)
-                        .foregroundStyle(.white.opacity(0.55))
-                        .padding(.bottom, 24)
+                    header
+                    profileStatus
+                    providerSelector
+                    installSection
+                    informationSection
                 }
                 .padding(.horizontal, 20)
-                .padding(.top, 22)
+                .padding(.vertical, 22)
             }
         }
         .preferredColorScheme(.dark)
     }
 
-    private var hero: some View {
-        HStack(alignment: .center, spacing: 16) {
+    private var header: some View {
+        HStack(spacing: 15) {
             Image(systemName: "shield.lefthalf.filled")
                 .font(.system(size: 48))
-                .foregroundStyle(.cyan)
-                .frame(width: 72, height: 72)
-                .background(.cyan.opacity(0.12), in: RoundedRectangle(cornerRadius: 20))
-            VStack(alignment: .leading, spacing: 5) {
+                .foregroundStyle(cyan)
+                .frame(width: 78, height: 78)
+                .background(cyan.opacity(0.1), in: RoundedRectangle(cornerRadius: 21))
+            VStack(alignment: .leading, spacing: 6) {
                 Text("NOVA AdBlock")
                     .font(.system(size: 29, weight: .bold, design: .rounded))
                     .foregroundStyle(.white)
-                Text("PRIVACY • NETWORK • CONTROL")
-                    .font(.caption2.weight(.bold))
-                    .tracking(1.3)
-                    .foregroundStyle(.cyan)
+                Text("DNS PROFILE EDITION")
+                    .font(.caption.weight(.bold))
+                    .tracking(1.7)
+                    .foregroundStyle(cyan)
             }
             Spacer()
         }
     }
 
-    private var status: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                Circle()
-                    .fill(vpn.enabled ? Color.green : Color.gray)
-                    .frame(width: 11, height: 11)
-                Text(vpn.statusLabel)
-                    .font(.headline)
-                    .foregroundStyle(.white)
-                Spacer()
-                Image(systemName: "antenna.radiowaves.left.and.right")
-                    .foregroundStyle(.cyan)
-            }
-            if selectedMode == .dns {
-                Button {
-                    Task {
-                        await vpn.setProtection(!vpn.enabled,
-                                                resolver: resolver,
-                                                filtering: filterEnabled,
-                                                allowed: parseDomainLines(allowDomains),
-                                                blocked: parseDomainLines(blockDomains))
-                    }
-                } label: {
-                    Label(vpn.enabled ? "Disconnect DNS" : "Connect DNS protection",
-                          systemImage: vpn.enabled ? "stop.fill" : "power")
-                        .font(.headline)
-                        .frame(maxWidth: .infinity)
-                        .padding(16)
-                }
-                .buttonStyle(.plain)
-                .background(vpn.enabled ? Color.white.opacity(0.16) : Color.cyan,
-                            in: RoundedRectangle(cornerRadius: 16))
-                .foregroundStyle(vpn.enabled ? .white : .black)
-                .disabled(vpn.busy)
-            } else {
-                Text("Remote VPN is not configured. No VPN traffic is being routed by this mode.")
-                    .font(.footnote)
-                    .foregroundStyle(.yellow)
-            }
-            if let error = vpn.errorText {
-                VStack(alignment: .leading, spacing: 9) {
-                    Label(vpn.signingIssue ? "Network Extension signing blocked" : "Connection issue",
-                          systemImage: "exclamationmark.triangle.fill")
-                        .font(.subheadline.bold())
-                    Text(error)
-                        .font(.footnote)
-                    if vpn.signingIssue {
-                        Text("Fix in Feather or ESign: both com.nova.adblock and com.nova.adblock.tunnel must be signed with Apple-approved provisioning profiles that include the packet-tunnel-provider entitlement. A P12 certificate alone cannot add an entitlement. If your profiles do not allow it, use appropriate profiles and reinstall.")
-                            .font(.footnote)
-                            .foregroundStyle(.white.opacity(0.86))
-                    }
-                }
-                .padding(12)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .foregroundStyle(.orange)
-                .background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 12))
-            }
-        }
-        .padding(20)
-        .background(.white.opacity(0.075), in: RoundedRectangle(cornerRadius: 22))
-    }
-
-    private var modeChooser: some View {
+    private var profileStatus: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Protection mode")
+            Label("No VPN permission required", systemImage: "checkmark.shield.fill")
+                .font(.headline)
+                .foregroundStyle(.green)
+
+            Text("This version has no VPN or Network Extension. iOS applies the encrypted DNS configuration after you install a profile in Settings.")
+                .font(.subheadline)
+                .foregroundStyle(.white.opacity(0.85))
+
+            HStack(spacing: 8) {
+                Image(systemName: "info.circle")
+                Text("DNS status cannot be automatically verified by this companion app.")
+            }
+            .font(.footnote)
+            .foregroundStyle(.white.opacity(0.68))
+
+            Toggle("I installed and selected the DNS profile", isOn: $confirmedInstalled)
+                .tint(cyan)
+                .foregroundStyle(.white)
+
+            Text(confirmedInstalled ? "Marked installed by you — not independently verified" : "Installation not yet confirmed")
+                .font(.caption)
+                .foregroundStyle(confirmedInstalled ? .green : .orange)
+        }
+        .padding(20)
+        .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 22))
+    }
+
+    private var providerSelector: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Choose your filter")
                 .font(.title3.bold())
                 .foregroundStyle(.white)
-            ForEach(ProtectionMode.allCases) { mode in
+
+            ForEach(DNSProvider.allCases) { provider in
                 Button {
-                    selectedMode = mode
+                    selectedProvider = provider.rawValue
+                    confirmedInstalled = false
                 } label: {
-                    HStack(spacing: 13) {
-                        Image(systemName: mode.symbol)
-                            .font(.title3)
-                            .frame(width: 32)
-                            .foregroundStyle(mode == selectedMode ? .cyan : .white.opacity(0.75))
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(mode.rawValue)
-                                .font(.headline)
-                                .foregroundStyle(.white)
-                            Text(mode.subtitle)
-                                .font(.caption)
-                                .foregroundStyle(.white.opacity(0.55))
+                    HStack(spacing: 14) {
+                        Image(systemName: "network.badge.shield.half.filled")
+                            .font(.title2)
+                            .foregroundStyle(cyan)
+                            .frame(width: 35)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(provider.rawValue).font(.headline)
+                            Text(provider.service).font(.caption).foregroundStyle(.white.opacity(0.66))
+                            Text(provider.details).font(.caption).foregroundStyle(.white.opacity(0.56))
                         }
-                        Spacer(minLength: 4)
-                        Image(systemName: mode == selectedMode ? "largecircle.fill.circle" : "circle")
-                            .foregroundStyle(mode == selectedMode ? .cyan : .white.opacity(0.5))
+                        Spacer(minLength: 3)
+                        Image(systemName: choice == provider ? "largecircle.fill.circle" : "circle")
+                            .foregroundStyle(choice == provider ? cyan : .gray)
                     }
+                    .foregroundStyle(.white)
                     .padding(15)
-                    .background(.white.opacity(mode == selectedMode ? 0.13 : 0.05),
-                                in: RoundedRectangle(cornerRadius: 15))
+                    .background(.white.opacity(choice == provider ? 0.14 : 0.055),
+                                in: RoundedRectangle(cornerRadius: 17))
                 }
                 .buttonStyle(.plain)
             }
+
+            Text("Your DNS queries go to the selected third-party provider. NOVA does not host the resolver or process DNS requests itself.")
+                .font(.footnote)
+                .foregroundStyle(.white.opacity(0.65))
         }
     }
 
-    private var dnsSettings: some View {
-        VStack(alignment: .leading, spacing: 17) {
-            Text("DNS & filter settings")
+    private var installSection: some View {
+        VStack(alignment: .leading, spacing: 15) {
+            Text("Install DNS protection")
                 .font(.title3.bold())
                 .foregroundStyle(.white)
 
-            Toggle(isOn: $filterEnabled) {
-                VStack(alignment: .leading) {
-                    Text("OISD Big filtering").font(.headline)
-                    Text("Local domain matching").font(.caption).foregroundStyle(.white.opacity(0.65))
-                }
+            Link(destination: choice.profileURL) {
+                Label("Download DNS profile in Safari", systemImage: "arrow.down.doc.fill")
+                    .font(.headline)
+                    .frame(maxWidth: .infinity)
+                    .padding(16)
+                    .foregroundStyle(.black)
+                    .background(cyan, in: RoundedRectangle(cornerRadius: 16))
             }
-            .tint(.cyan)
 
-            Picker("Encrypted DNS upstream", selection: $resolver) {
-                Text("Cloudflare DoH").tag("cloudflare")
-                Text("Quad9 DoH").tag("quad9")
+            Link(destination: choice.providerInfoURL) {
+                Label("Provider details and alternative download", systemImage: "safari.fill")
+                    .font(.subheadline.bold())
+                    .frame(maxWidth: .infinity)
+                    .padding(14)
+                    .foregroundStyle(.white)
+                    .background(.white.opacity(0.13), in: RoundedRectangle(cornerRadius: 14))
             }
-            .tint(.cyan)
 
-            Text("Allowlisted domains")
-                .font(.subheadline.bold())
-            TextEditor(text: $allowDomains)
-                .scrollContentBackground(.hidden)
-                .frame(height: 86)
-                .padding(7)
-                .background(.black.opacity(0.25), in: RoundedRectangle(cornerRadius: 12))
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
+            VStack(alignment: .leading, spacing: 11) {
+                step("1", "Open the profile link using Safari on your iPhone.")
+                step("2", "Allow the profile download if iOS prompts you.")
+                step("3", "Go to Settings → General → VPN & Device Management.")
+                step("4", "Choose the downloaded profile, review its DNS endpoint, then tap Install.")
+                step("5", "Select it in iOS DNS settings if prompted; remove other DNS profiles to prevent conflicts.")
+            }
 
-            Text("Extra blocked domains")
-                .font(.subheadline.bold())
-            TextEditor(text: $blockDomains)
-                .scrollContentBackground(.hidden)
-                .frame(height: 86)
-                .padding(7)
-                .background(.black.opacity(0.25), in: RoundedRectangle(cornerRadius: 12))
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
+            Text("Profile endpoint: " + choice.endpoint)
+                .font(.footnote.monospaced())
+                .foregroundStyle(cyan)
+                .textSelection(.enabled)
 
-            Text("Enter one domain per line. Allowlist rules override OISD Big and custom blocks. " + changesRequireReconnect)
+            Text("iOS 27 deprecates the older manually installed DNS profile payload. Availability may vary; test the profile in Settings. If installation fails, use the provider's official profile instructions or managed DNS settings.")
                 .font(.footnote)
-                .foregroundStyle(.white.opacity(0.63))
-            Text("Supported today: IPv4/UDP DNS with DNS-over-HTTPS forwarding. DNS-over-TLS and IPv6 are planned, not active.")
-                .font(.footnote)
-                .foregroundStyle(.white.opacity(0.63))
+                .foregroundStyle(.yellow)
         }
-        .foregroundStyle(.white)
-        .padding(20)
-        .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 22))
+        .padding(18)
+        .background(.white.opacity(0.065), in: RoundedRectangle(cornerRadius: 20))
     }
 
-    private var vpnSetup: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Label("Remote VPN setup required", systemImage: "server.rack")
-                .font(.headline)
-                .foregroundStyle(.yellow)
-            Text("The local DNS tunnel cannot forward all internet traffic to a remote VPN. This mode needs a VPN server, approved connection profile, and an actual packet encryption/transport implementation (such as WireGuardKit).")
-                .font(.subheadline)
-                .foregroundStyle(.white.opacity(0.78))
-            Text("Do not enter private VPN keys in a public GitHub repository. VPN mode remains unavailable until configured and verified.")
-                .font(.footnote)
-                .foregroundStyle(.white.opacity(0.58))
+    private func step(_ number: String, _ explanation: String) -> some View {
+        HStack(alignment: .top, spacing: 11) {
+            Text(number)
+                .font(.caption.bold())
+                .foregroundStyle(.black)
+                .frame(width: 23, height: 23)
+                .background(cyan, in: Circle())
+            Text(explanation).font(.subheadline).foregroundStyle(.white.opacity(0.9))
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(20)
-        .background(.white.opacity(0.075), in: RoundedRectangle(cornerRadius: 20))
+    }
+
+    private var informationSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label("What this edition does", systemImage: "info.circle.fill")
+                .font(.headline)
+                .foregroundStyle(.white)
+
+            Text("The DNS profile can cover Wi-Fi and cellular. It is not a remote VPN, does not change your public IP, and does not eliminate in-page cosmetic ads or traffic from apps using their own encrypted DNS.")
+            Text("A VPN, private relay, or other DNS configuration may override the profile. To turn off DNS protection, remove or disable the profile in iOS Settings.")
+            Text("OISD Big rules are maintained by the selected DNS provider. The old local blocklist, custom domain rules and VPN controls are not included in this edition.")
+        }
+        .font(.footnote)
+        .foregroundStyle(.white.opacity(0.69))
+        .padding(.bottom, 24)
     }
 }
