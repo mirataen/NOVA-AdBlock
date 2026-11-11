@@ -1,4 +1,4 @@
-name: Build NOVA AdBlock unsigned IPA
+name: Build NOVA DNS Edition unsigned IPA and profiles
 
 on:
   push:
@@ -15,29 +15,25 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Validate encrypted DNS profiles
+        run: python3 scripts/validate_profiles.py
+
       - name: Install XcodeGen
         run: |
           brew list xcodegen >/dev/null 2>&1 || brew install xcodegen
-      - name: Download and normalize official OISD Big blocklist
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p Tunnel/Resources
-          curl --fail --location --retry 3 --retry-delay 2 --max-time 180 https://big.oisd.nl -o /tmp/oisd-big.txt
-          python3 scripts/normalize_blocklist.py </tmp/oisd-big.txt > Tunnel/Resources/blocklist.txt
-          count=$(wc -l < Tunnel/Resources/blocklist.txt)
-          echo "OISD domains: $count"
-          test "$count" -gt 10000
-      - name: Render NOVA Home Screen icon
+
+      - name: Render NOVA icon
         shell: bash
         run: |
           set -euo pipefail
           swift scripts/make_app_icon.swift App/Assets.xcassets/AppIcon.appiconset/NOVA.png
           test -s App/Assets.xcassets/AppIcon.appiconset/NOVA.png
-          sips -g pixelWidth -g pixelHeight App/Assets.xcassets/AppIcon.appiconset/NOVA.png
+
       - name: Generate Xcode project
         run: xcodegen generate
-      - name: Compile app and Network Extension without Apple signing
+
+      - name: Compile iOS app without Network Extension or Apple signing
         shell: bash
         run: |
           set -euo pipefail
@@ -51,26 +47,40 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             build 2>&1 | tee "$RUNNER_TEMP/xcodebuild.log"
-      - name: Assemble unsigned IPA for Feather / ESign
+
+      - name: Verify icon and no VPN extension then package unsigned IPA
         shell: bash
         run: |
           set -euo pipefail
           app="$RUNNER_TEMP/NOVABuild/Build/Products/Release-iphoneos/NOVAAdBlock.app"
           test -d "$app"
-          test -d "$app/PlugIns/NOVATunnel.appex"
-          test -s "$app/PlugIns/NOVATunnel.appex/blocklist.txt"
           test -s "$app/Assets.car"
           icon_name=$(/usr/libexec/PlistBuddy -c 'Print CFBundleIcons:CFBundlePrimaryIcon:CFBundleIconName' "$app/Info.plist")
-          echo "Primary icon: $icon_name"
           test "$icon_name" = "AppIcon"
+          test ! -d "$app/PlugIns/NOVATunnel.appex"
+          if [ -d "$app/PlugIns" ]; then
+            if find "$app/PlugIns" -name '*.appex' | grep -q .; then
+              echo "Unexpected extension in DNS Edition"; exit 1
+            fi
+          fi
           mkdir -p "$RUNNER_TEMP/ipa/Payload"
           ditto "$app" "$RUNNER_TEMP/ipa/Payload/NOVAAdBlock.app"
-          (cd "$RUNNER_TEMP/ipa" && zip -q -r "$GITHUB_WORKSPACE/NOVA-AdBlock-unsigned.ipa" Payload)
-          unzip -t NOVA-AdBlock-unsigned.ipa | tail -1
-      - name: Upload IPA
+          (cd "$RUNNER_TEMP/ipa" && zip -q -r "$GITHUB_WORKSPACE/NOVA-AdBlock-DNS-Edition-unsigned.ipa" Payload)
+          unzip -t NOVA-AdBlock-DNS-Edition-unsigned.ipa | tail -1
+          echo "Unsigned DNS Edition IPA built without VPN extension"
+
+      - name: Upload unsigned IPA
         uses: actions/upload-artifact@v4
         with:
-          name: NOVA-AdBlock-unsigned-IPA
-          path: NOVA-AdBlock-unsigned.ipa
+          name: NOVA-DNS-Edition-unsigned-IPA
+          path: NOVA-AdBlock-DNS-Edition-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload installer profiles
+        uses: actions/upload-artifact@v4
+        with:
+          name: NOVA-DNS-configuration-profiles
+          path: profiles/*.mobileconfig
           if-no-files-found: error
           retention-days: 30
