@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>PayloadContent</key>
+  <array>
+    <dict>
+      <key>PayloadType</key><string>com.apple.dnsSettings.managed</string>
+      <key>PayloadVersion</key><integer>1</integer>
+      <key>PayloadIdentifier</key><string>com.nova.adblock.dns.full</string>
+      <key>PayloadUUID</key><string>13b55e4a-1a74-5e0d-a59c-66c05db9fc25</string>
+      <key>PayloadDisplayName</key><string>NOVA OISD Full - Control D</string>
+      <key>PayloadDescription</key><string>Encrypt DNS on Wi-Fi and cellular. Control D Free DNS provides the OISD Full preset. No local filtering or remote VPN.</string>
+      <key>DNSSettings</key>
+      <dict>
+        <key>DNSProtocol</key><string>HTTPS</string>
+        <key>ServerURL</key><string>https://freedns.controld.com/x-oisd</string>
+        <key>AllowFailover</key><false/>
+      </dict>
+    </dict>
+  </array>
+  <key>PayloadType</key><string>Configuration</string>
+  <key>PayloadVersion</key><integer>1</integer>
+  <key>PayloadIdentifier</key><string>com.nova.adblock.profile.full</string>
+  <key>PayloadUUID</key><string>0df03509-2bd6-56df-b65a-fdf2eb1ab4df</string>
+  <key>PayloadDisplayName</key><string>NOVA OISD Full - Control D</string>
+  <key>PayloadDescription</key><string>Encrypt DNS on Wi-Fi and cellular. Control D Free DNS provides the OISD Full preset. No local filtering or remote VPN.</string>
+  <key>PayloadOrganization</key><string>NOVA AdBlock</string>
+  <key>PayloadRemovalDisallowed</key><false/>
+</dict>
+</plist>
