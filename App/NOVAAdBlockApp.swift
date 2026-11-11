@@ -37,6 +37,7 @@ final class VPNController: ObservableObject {
     @Published private(set) var status: NEVPNStatus = .disconnected
     @Published private(set) var busy = false
     @Published var errorText: String?
+    @Published private(set) var signingIssue = false
 
     private var manager: NETunnelProviderManager?
     private var observer: NSObjectProtocol?
@@ -71,6 +72,19 @@ final class VPNController: ObservableObject {
         status = manager?.connection.status ?? .disconnected
     }
 
+    private func describe(_ error: Error, operation: String) -> String {
+        let message = (error as NSError).localizedDescription
+        let lower = message.lowercased()
+        if lower.contains("permission denied") ||
+            lower.contains("not entitled") ||
+            lower.contains("missing entitlement") {
+            signingIssue = true
+            return "iOS denied Network Extension access. Check the installed signing entitlement and provisioning profiles for both NOVA AdBlock and its tunnel extension."
+        }
+        signingIssue = false
+        return "\(operation): \(message)"
+    }
+
     func reload() async {
         do {
             let managers = try await NETunnelProviderManager.loadAllFromPreferences()
@@ -79,8 +93,10 @@ final class VPNController: ObservableObject {
                     == "com.nova.adblock.tunnel"
             }
             updateStatus()
+            signingIssue = false
+            errorText = nil
         } catch {
-            errorText = "Unable to read VPN settings: \(error.localizedDescription)"
+            errorText = describe(error, operation: "Unable to read VPN settings")
         }
     }
 
@@ -120,8 +136,7 @@ final class VPNController: ObservableObject {
             }
             updateStatus()
         } catch {
-            errorText = "Cannot change protection: \(error.localizedDescription). The app and extension must be signed with matching Network Extension capabilities."
-            await reload()
+            errorText = describe(error, operation: "Cannot change protection")
         }
     }
 }
@@ -237,7 +252,22 @@ struct ContentView: View {
                     .foregroundStyle(.yellow)
             }
             if let error = vpn.errorText {
-                Text(error).font(.footnote).foregroundStyle(.orange)
+                VStack(alignment: .leading, spacing: 9) {
+                    Label(vpn.signingIssue ? "Network Extension signing blocked" : "Connection issue",
+                          systemImage: "exclamationmark.triangle.fill")
+                        .font(.subheadline.bold())
+                    Text(error)
+                        .font(.footnote)
+                    if vpn.signingIssue {
+                        Text("Fix in Feather or ESign: both com.nova.adblock and com.nova.adblock.tunnel must be signed with Apple-approved provisioning profiles that include the packet-tunnel-provider entitlement. A P12 certificate alone cannot add an entitlement. If your profiles do not allow it, use appropriate profiles and reinstall.")
+                            .font(.footnote)
+                            .foregroundStyle(.white.opacity(0.86))
+                    }
+                }
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .foregroundStyle(.orange)
+                .background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 12))
             }
         }
         .padding(20)
