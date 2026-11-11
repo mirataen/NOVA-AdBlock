@@ -33,8 +33,8 @@ jobs:
         run: |
           set -euo pipefail
           swift scripts/make_app_icon.swift App/Assets.xcassets/AppIcon.appiconset/NOVA.png
-          sips -g pixelWidth -g pixelHeight App/Assets.xcassets/AppIcon.appiconset/NOVA.png
           test -s App/Assets.xcassets/AppIcon.appiconset/NOVA.png
+          sips -g pixelWidth -g pixelHeight App/Assets.xcassets/AppIcon.appiconset/NOVA.png
       - name: Generate Xcode project
         run: xcodegen generate
       - name: Compile app and Network Extension without Apple signing
@@ -60,19 +60,9 @@ jobs:
           test -d "$app/PlugIns/NOVATunnel.appex"
           test -s "$app/PlugIns/NOVATunnel.appex/blocklist.txt"
           test -s "$app/Assets.car"
-          /usr/libexec/PlistBuddy -c 'Print CFBundleIcons:CFBundlePrimaryIcon:CFBundleIconName' "$app/Info.plist" | grep -q '^AppIcon
-          mkdir -p "$RUNNER_TEMP/ipa/Payload"
-          ditto "$app" "$RUNNER_TEMP/ipa/Payload/NOVAAdBlock.app"
-          (cd "$RUNNER_TEMP/ipa" && zip -q -r "$GITHUB_WORKSPACE/NOVA-AdBlock-unsigned.ipa" Payload)
-          unzip -t NOVA-AdBlock-unsigned.ipa | tail -1
-      - name: Upload IPA
-        uses: actions/upload-artifact@v4
-        with:
-          name: NOVA-AdBlock-unsigned-IPA
-          path: NOVA-AdBlock-unsigned.ipa
-          if-no-files-found: error
-          retention-days: 30
-
+          icon_name=$(/usr/libexec/PlistBuddy -c 'Print CFBundleIcons:CFBundlePrimaryIcon:CFBundleIconName' "$app/Info.plist")
+          echo "Primary icon: $icon_name"
+          test "$icon_name" = "AppIcon"
           mkdir -p "$RUNNER_TEMP/ipa/Payload"
           ditto "$app" "$RUNNER_TEMP/ipa/Payload/NOVAAdBlock.app"
           (cd "$RUNNER_TEMP/ipa" && zip -q -r "$GITHUB_WORKSPACE/NOVA-AdBlock-unsigned.ipa" Payload)
