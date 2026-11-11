@@ -136,15 +136,16 @@ private struct DNSPacket {
         let udpOffset = ipLength
         let udpLength = Int(bytes[udpOffset + 4]) << 8 | Int(bytes[udpOffset + 5])
         guard udpLength >= 20, udpOffset + udpLength <= totalLength else { return }
+        let queryDNS = Array(bytes[(udpOffset + 8)..<(udpOffset + udpLength)])
+        guard queryDNS.count >= 17, queryDNS[2] & 0x80 == 0,
+              queryDNS[4] == 0, queryDNS[5] == 1,
+              let parsed = DNSPacket.readQuestionDomain(queryDNS)
+        else { return }
         sourceIP = Array(bytes[12..<16])
         destinationIP = Array(bytes[16..<20])
         sourcePort = UInt16(bytes[udpOffset]) << 8 | UInt16(bytes[udpOffset+1])
         destinationPort = UInt16(bytes[udpOffset+2]) << 8 | UInt16(bytes[udpOffset+3])
-        dns = Array(bytes[(udpOffset + 8)..<(udpOffset + udpLength)])
-        guard dns.count >= 17, dns[2] & 0x80 == 0,
-              dns[4] == 0, dns[5] == 1,
-              let parsed = DNSPacket.readQuestionDomain(dns)
-        else { return }
+        dns = queryDNS
         domain = parsed
     }
 
