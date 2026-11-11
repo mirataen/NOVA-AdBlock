@@ -1,0 +1,65 @@
+name: Build NOVA AdBlock unsigned IPA
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ipa:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Install XcodeGen
+        run: |
+          brew list xcodegen >/dev/null 2>&1 || brew install xcodegen
+      - name: Download and normalize official OISD Big blocklist
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p Tunnel/Resources
+          curl --fail --location --retry 3 --retry-delay 2 --max-time 180 https://big.oisd.nl -o /tmp/oisd-big.txt
+          python3 scripts/normalize_blocklist.py </tmp/oisd-big.txt > Tunnel/Resources/blocklist.txt
+          count=$(wc -l < Tunnel/Resources/blocklist.txt)
+          echo "OISD domains: $count"
+          test "$count" -gt 10000
+      - name: Generate Xcode project
+        run: xcodegen generate
+      - name: Compile app and Network Extension without Apple signing
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project NOVAAdBlock.xcodeproj \
+            -scheme NOVAAdBlock \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination "generic/platform=iOS" \
+            -derivedDataPath "$RUNNER_TEMP/NOVABuild" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build 2>&1 | tee "$RUNNER_TEMP/xcodebuild.log"
+      - name: Assemble unsigned IPA for Feather / ESign
+        shell: bash
+        run: |
+          set -euo pipefail
+          app="$RUNNER_TEMP/NOVABuild/Build/Products/Release-iphoneos/NOVAAdBlock.app"
+          test -d "$app"
+          test -d "$app/PlugIns/NOVATunnel.appex"
+          test -s "$app/PlugIns/NOVATunnel.appex/blocklist.txt"
+          mkdir -p "$RUNNER_TEMP/ipa/Payload"
+          ditto "$app" "$RUNNER_TEMP/ipa/Payload/NOVAAdBlock.app"
+          (cd "$RUNNER_TEMP/ipa" && zip -q -r "$GITHUB_WORKSPACE/NOVA-AdBlock-unsigned.ipa" Payload)
+          unzip -t NOVA-AdBlock-unsigned.ipa | tail -1
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: NOVA-AdBlock-unsigned-IPA
+          path: NOVA-AdBlock-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 30
