@@ -22,11 +22,11 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
 
     override func startTunnel(options: [String: NSObject]?,
                               completionHandler: @escaping (Error?) -> Void) {
-        let settings = (protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration ?? [:]
-        filterEnabled = (settings["filterEnabled"] as? String) != "0"
-        allowedDomains = Set(settings["allowDomains"] as? [String] ?? [])
-        blockedDomains = Set(settings["blockDomains"] as? [String] ?? [])
-        upstreamEndpoint = (settings["dnsResolver"] as? String) == "quad9"
+        let providerSettings = (protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration ?? [:]
+        filterEnabled = (providerSettings["filterEnabled"] as? String) != "0"
+        allowedDomains = Set(providerSettings["allowDomains"] as? [String] ?? [])
+        blockedDomains = Set(providerSettings["blockDomains"] as? [String] ?? [])
+        upstreamEndpoint = (providerSettings["dnsResolver"] as? String) == "quad9"
             ? "https://9.9.9.9/dns-query"
             : "https://1.1.1.1/dns-query"
         do {
