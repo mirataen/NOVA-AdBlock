@@ -8,6 +8,10 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     private let dnsAddress = "198.18.0.1"
     private var blocklist: DomainBlocklist?
     private var active = false
+    private var filterEnabled = true
+    private var allowedDomains = Set<String>()
+    private var blockedDomains = Set<String>()
+    private var upstreamEndpoint = "https://1.1.1.1/dns-query"
     private lazy var upstream: URLSession = {
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = 8
@@ -18,6 +22,13 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
 
     override func startTunnel(options: [String: NSObject]?,
                               completionHandler: @escaping (Error?) -> Void) {
+        let settings = (protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration ?? [:]
+        filterEnabled = (settings["filterEnabled"] as? String) != "0"
+        allowedDomains = Set(settings["allowDomains"] as? [String] ?? [])
+        blockedDomains = Set(settings["blockDomains"] as? [String] ?? [])
+        upstreamEndpoint = (settings["dnsResolver"] as? String) == "quad9"
+            ? "https://9.9.9.9/dns-query"
+            : "https://1.1.1.1/dns-query"
         do {
             guard let url = Bundle.main.url(forResource: "blocklist", withExtension: "txt") else {
                 throw NSError(domain: "NOVA", code: 1,
@@ -79,14 +90,16 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         guard let query = DNSPacket(packet: packet), query.destinationPort == 53 else {
             return
         }
-        if blocklist?.blocks(query.domain) == true {
+        if filterEnabled && !matchesRule(query.domain, in: allowedDomains)
+            && (matchesRule(query.domain, in: blockedDomains)
+                || blocklist?.blocks(query.domain) == true) {
             reply(query: query, dns: DNSPacket.errorAnswer(to: query.dns, code: 3))
             return
         }
 
         // IP-literal HTTPS endpoint avoids resolving the upstream name via
         // the virtual DNS address and causing a DNS bootstrap loop.
-        guard let url = URL(string: "https://1.1.1.1/dns-query") else { return }
+        guard let url = URL(string: upstreamEndpoint) else { return }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.httpBody = Data(query.dns)
@@ -104,6 +117,16 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             }
             self.reply(query: query, dns: answer)
         }.resume()
+    }
+
+    private func matchesRule(_ domain: String, in rules: Set<String>) -> Bool {
+        var candidate = domain.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))
+        while !candidate.isEmpty {
+            if rules.contains(candidate) { return true }
+            guard let dot = candidate.firstIndex(of: ".") else { return false }
+            candidate = String(candidate[candidate.index(after: dot)...])
+        }
+        return false
     }
 
     private func reply(query: DNSPacket, dns: [UInt8]) {
