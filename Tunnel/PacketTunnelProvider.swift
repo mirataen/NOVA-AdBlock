@@ -124,23 +124,23 @@ private struct DNSPacket {
 
     init?(packet: Data) {
         let bytes = [UInt8](packet)
-        guard bytes.count >= 40, bytes[0] >> 4 == 4 else { return }
+        guard bytes.count >= 40, bytes[0] >> 4 == 4 else { return nil }
         let ipLength = Int(bytes[0] & 0x0f) * 4
         guard ipLength >= 20, bytes.count >= ipLength + 8 + 12,
               bytes[9] == 17,
               (UInt16(bytes[6]) << 8 | UInt16(bytes[7])) & 0x1fff == 0
-        else { return }
+        else { return nil }
         let totalLength = Int(bytes[2]) << 8 | Int(bytes[3])
-        guard totalLength <= bytes.count, totalLength >= ipLength + 20 else { return }
+        guard totalLength <= bytes.count, totalLength >= ipLength + 20 else { return nil }
 
         let udpOffset = ipLength
         let udpLength = Int(bytes[udpOffset + 4]) << 8 | Int(bytes[udpOffset + 5])
-        guard udpLength >= 20, udpOffset + udpLength <= totalLength else { return }
+        guard udpLength >= 20, udpOffset + udpLength <= totalLength else { return nil }
         let queryDNS = Array(bytes[(udpOffset + 8)..<(udpOffset + udpLength)])
         guard queryDNS.count >= 17, queryDNS[2] & 0x80 == 0,
               queryDNS[4] == 0, queryDNS[5] == 1,
               let parsed = DNSPacket.readQuestionDomain(queryDNS)
-        else { return }
+        else { return nil }
         sourceIP = Array(bytes[12..<16])
         destinationIP = Array(bytes[16..<20])
         sourcePort = UInt16(bytes[udpOffset]) << 8 | UInt16(bytes[udpOffset+1])
