@@ -1,0 +1,25 @@
+name: OJBSChat
+options:
+  bundleIdPrefix: com.mirataen
+settings:
+  base:
+    SWIFT_VERSION: '5.0'
+    IPHONEOS_DEPLOYMENT_TARGET: '17.0'
+    TARGETED_DEVICE_FAMILY: '1'
+    GENERATE_INFOPLIST_FILE: 'YES'
+    ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+targets:
+  OJBSChat:
+    type: application
+    platform: iOS
+    deploymentTarget: '17.0'
+    sources:
+      - path: Sources/OJBSBenchApp.swift
+      - path: Resources/Assets.xcassets
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.mirataen.ojbschat
+        INFOPLIST_KEY_CFBundleDisplayName: 'OJBS Bench'
+        INFOPLIST_KEY_UILaunchScreen_Generation: 'YES'
+        SUPPORTS_MACCATALYST: 'NO'
+        CODE_SIGNING_ALLOWED: 'NO'
