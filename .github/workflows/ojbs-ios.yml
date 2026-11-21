@@ -1,0 +1,83 @@
+name: OJBS Bench unsigned IPA
+on:
+  push:
+    branches:
+      - ojbs-ipa-build
+    paths:
+      - OJBSChat/**
+      - .github/workflows/ojbs-ios.yml
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: macos-26
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare Swift source and app icon
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import base64, gzip, struct, zlib, json
+          root=Path("OJBSChat")
+          packed=(root/"Sources/OJBSBenchApp.swift.gz.b64").read_text()
+          (root/"Sources/OJBSBenchApp.swift").write_bytes(gzip.decompress(base64.b64decode(packed)))
+          icon_dir=root/"Resources/Assets.xcassets/AppIcon.appiconset"
+          icon_dir.mkdir(parents=True, exist_ok=True)
+          (icon_dir/"Contents.json").write_text(json.dumps({"images":[{"filename":"AppIcon.png","idiom":"universal","platform":"ios","size":"1024x1024"}],"info":{"author":"xcode","version":1}}))
+          n=1024
+          dark=b"\x0a\x10\x19"
+          lime=b"\xb0\xf6\x69"
+          canvas=[bytearray(dark*n) for _ in range(n)]
+          def rect(x,y,w,h,c):
+              for r in range(max(0,y),min(n,y+h)):
+                  x1=max(0,x); x2=min(n,x+w)
+                  canvas[r][x1*3:x2*3]=c*(x2-x1)
+          rect(60,60,904,25,lime)
+          rect(60,939,904,25,lime)
+          rect(60,60,25,904,lime)
+          rect(939,60,25,904,lime)
+          patterns=[
+              ["111","100","100","100","100","100","111"],
+              ["01110","10001","10001","10001","10001","10001","01110"],
+              ["111","001","001","001","001","001","111"]
+          ]
+          scale=53
+          total=(3+1+5+1+3)*scale
+          cursor=(n-total)//2
+          top=(n-7*scale)//2
+          for pattern in patterns:
+              for ry,line in enumerate(pattern):
+                  for rx,p in enumerate(line):
+                      if p=="1": rect(cursor+rx*scale,top+ry*scale,scale-7,scale-7,lime)
+              cursor+=(len(pattern[0])+1)*scale
+          raw=b"".join(b"\x00"+bytes(line) for line in canvas)
+          def chunk(t,d): return struct.pack(">I",len(d))+t+d+struct.pack(">I",zlib.crc32(t+d)&0xffffffff)
+          png=b"\x89PNG\r\n\x1a\n"+chunk(b"IHDR",struct.pack(">IIBBBBB",n,n,8,2,0,0,0))+chunk(b"IDAT",zlib.compress(raw,9))+chunk(b"IEND",b"")
+          (icon_dir/"AppIcon.png").write_bytes(png)
+          PY
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate native project
+        working-directory: OJBSChat
+        run: xcodegen generate
+      - name: Compile iPhone app (unsigned)
+        working-directory: OJBSChat
+        run: |
+          xcodebuild -project OJBSChat.xcodeproj \
+            -scheme OJBSChat -configuration Release \
+            -sdk iphoneos -destination 'generic/platform=iOS' \
+            -derivedDataPath .build CODE_SIGNING_ALLOWED=NO build
+      - name: Package IPA
+        working-directory: OJBSChat
+        run: |
+          test -x .build/Build/Products/Release-iphoneos/OJBSChat.app/OJBSChat
+          mkdir -p Payload
+          cp -R .build/Build/Products/Release-iphoneos/OJBSChat.app Payload/
+          zip -qr OJBSChat-unsigned.ipa Payload
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: OJBSChat-unsigned-IPA
+          path: OJBSChat/OJBSChat-unsigned.ipa
+          if-no-files-found: error
